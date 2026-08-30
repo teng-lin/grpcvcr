@@ -265,7 +265,9 @@ Three more public `Cassette` methods break, and all three are unavoidable:
 | --- | --- |
 | `get_response(method, request_body, metadata)` | Returns `Interaction`, so it inherits the immutable-view ruling above. Its documented `Raises:` contract is `NoMatchingInteractionError`, whose attributes are removed above — and this method is the call site that passes `request_body` and `self.interactions` into it. It is also a stateless find-and-return, incompatible with the atomic reserve/consume lifecycle. |
 | `find_interaction(InteractionRequest)` | Same stateless-lookup problem: it cannot reserve, so it cannot participate in ordered consumption. |
-| `save()` | Gains new failure modes under the storage transaction — source-hash conflict, symlinked destination, lock acquisition — on a method that today raises only `CassetteWriteError`. | `Cassette("test.yaml")` string-path coercion, `use_cassette`,
+| `save()` | Gains new failure modes under the storage transaction — source-hash conflict, symlinked destination, lock acquisition — on a method that today raises only `CassetteWriteError`. |
+
+`Cassette("test.yaml")` string-path coercion, `use_cassette`,
 `Matcher.__and__` composition, and the `grpcvcr.serialization` names
 (`InteractionRequest`, `InteractionResponse`, `StreamingInteractionResponse`,
 `Interaction`, `CassetteData`, `CassetteSerializer`) are all in the pull request 1
