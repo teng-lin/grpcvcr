@@ -1,8 +1,10 @@
 # grpcvcr 0.2 Refactor Plan
 
-Status: review-converged and implementation-ready. `0.2` is the single release:
-all four RPC shapes, one new cassette schema, no intermediate publication
-(see [Resolved decisions and residual risks](#resolved-decisions-and-residual-risks)).  
+Status: review-converged and implementation-ready, with **one open decision** —
+whether the streaming shapes ship in the single `0.2` or in a follow-on `0.3`
+against the same schema (see [Open decision: release staging](#open-decision-release-staging)).
+The document below specifies Option A, the single combined release; the other
+options are deltas against it, not rewrites.  
 Last updated: 2026-08-30 · Owner: upstream maintainer · Next review: at each phase exit
 
 !!! warning "Not user documentation"
@@ -153,6 +155,104 @@ replace the cassette format, change the default matcher, rename fixtures, and
 retire the interceptor subpackage without a major bump and with no required
 deprecation cycle. That permission is what makes a single combined release
 possible at no versioning cost.
+
+## Open decision: release staging
+
+The combined release above is Option A. Two alternatives stage the same work
+differently. This section exists because the choice is the maintainer's and the
+costs are not obvious from the phase table.
+
+The decision is **binary at the runtime level**, not a dial. The expensive part
+of streaming support is the call lifecycle — the request pump, half-close as
+orthogonal state, cancellation mid-request-stream, write-before-delegation, and
+the concurrent reader/writer matrix — and that machinery is shared between
+`stream_unary` and `stream_stream`. Once it exists for one, the other is roughly
+8–12 engineer-days, not 25–35. So there is no cheap "ship three of four shapes"
+middle, and lowering match fidelity saves only the incremental-validation work
+(2–4 days) while removing the ability to detect a regression in what the client
+sends.
+
+| | A. Single release (specified above) | B. Two releases, two schemas | C. Two releases, one schema |
+| --- | --- | --- | --- |
+| First published release | `0.2`, all four shapes | `0.2`, unary shapes | `0.2`, unary shapes |
+| Days to first release | 69–107 | 44–72 | 44–72, or 41–69 if the streaming grammar is deferred to a feature |
+| Total program days | 69–107 | 77–119 | 71–111 |
+| Cassette schema majors introduced | 1 | 2 (v2, then v3) | 1 |
+| User migrates between our own schemas | Never | **v2 → v3** | Never |
+| Shapes *recordable* in first release | 4 | 2 | 2 |
+| Shapes *replayable* in first release | 4 | 2 new + 4 legacy via the frozen v1 adapter | 2 new + 4 legacy via the frozen v1 adapter |
+| Pilot pins a released version | Only at the end; installs by commit until then | At `0.2` | At `0.2` |
+| Merged correctness fixes reach users | After 69–107 days | After 44–72 days | After 44–72 days |
+
+Option C costs 2–4 more engineer-days in total than A, because release overhead
+is paid twice, and delivers the first published release 25–35 days sooner. Option
+B is dominated by C on both schedule and user cost: same staging, but it
+introduces a second schema major and the migration tooling to go with it.
+
+### What each option risks
+
+**A** freezes the v2 event grammar at Phase 1 by prototype rather than at Phase 5
+by implementation. If the streaming implementation finds the model wrong, the
+correction lands in a schema that Phases 2a–4 already validate against, and those
+phases carry rework. It also holds `fail_under = 100` across the whole program
+with no release valve, and strands the merged correctness fixes for the full
+69–107 days — during which `main` is not a safe interim source, because from
+Phase 3 it carries the breaking refactor and supports two of four shapes.
+
+**B** ships a `0.2` cassette format that `0.3` then replaces, so every user who
+records against `0.2` migrates. That is the cost the combined release was
+adopted to avoid, and nothing recovers it.
+
+**C** publishes a release that records fewer shapes than `0.1.x`. That is the
+real cost and it is stated plainly. Three things bound it:
+
+- The frozen v1 adapter still replays existing client-streaming and bidi
+  recordings, so no cassette a user already holds stops working.
+- What is withdrawn is documented-lossy. `0.1.x` concatenates request messages
+  (`interceptors/sync.py:167`), and concatenated protobufs parse as their merge,
+  so message boundaries are unrecoverable *and* distinct streams collide: the
+  two-message stream `[{name:"a"}, {email:"z"}]` and the one-message stream
+  `[{name:"a", email:"z"}]` serialize to identical bytes, so `RequestMatcher`
+  cannot tell them apart. `docs/concepts/streaming.md:87` documents the
+  concatenation as the matching strategy.
+- Two live bugs sit in that path today: an intercepted `grpc.aio` reader/writer
+  call deadlocks, and a plain synchronous iterable — legal input to `grpc.aio` —
+  raises `TypeError`.
+
+Withdrawing a lossy, collision-prone, partly broken capability from an alpha
+library at `0.1.x` is closer to a correctness fix than to a regression. The
+argument does not hold if real users record those shapes today; that is the one
+fact that should decide it, and the downstream pilot is not such a user — its
+adoption gate names only `GetProject` and one unary-stream interaction.
+
+### If C is chosen
+
+The deltas against the document below are small and local:
+
+- `Release scope` gains a `0.3` row for the streaming runtime. `0.2`'s row loses
+  the streaming shapes.
+- Phase 5 moves to `0.3`. Phase 6 becomes `0.2`'s release phase.
+- `UnsupportedRpcShapeError` becomes reachable in released `0.2` for
+  `stream_unary` and `stream_stream`, so it is root-exported after all and the
+  root error count returns to eight.
+- Phase 4's conformance exit criterion already asserts only the unary rows, so it
+  is unchanged.
+- Schema v2 is unchanged: it keeps the full four-shape event grammar. This is
+  what makes C differ from B, and it is why streaming later needs no schema
+  major.
+
+One sub-choice inside C: either freeze the whole grammar now, keeping the Phase 1
+streaming prototypes as a `0.2` gate (44–72 days), or ship `0.2` with the unary
+event kinds and introduce `client_half_close`, `client_ordinal`, and
+`client_messages_sent` in `0.3` under a `required_features` entry (41–69 days).
+The second defers 3 engineer-days and the prototype risk, at the cost that a
+`0.3`-written cassette is unreadable by a `0.2` reader — which the feature
+mechanism already specifies as the correct behavior for a new event kind.
+
+**Recommendation: Option C.** It keeps the whole benefit of combining — one
+schema major, no v2 → v3 migration — while removing 25–35 days from the critical
+path, publishing the merged correctness fixes 25–35 days sooner, and letting the
+pilot pin a released version instead of a commit.
 
 ## Breaking changes in 0.2
 
