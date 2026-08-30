@@ -673,7 +673,7 @@ The shipped all-shape claims in `README.md:32`, `docs/index.md:32`,
 `docs/concepts/index.md:28`, `docs/concepts/streaming.md:3`, and
 `CHANGELOG.md:13` become **false for recording** in `0.2`: only the frozen v1
 adapter still handles client-streaming and bidi, and only for playback. Phase 5
-rescopes each claim to the two shapes `0.2` records, states the withdrawal, and
+rescopes each claim to the two shapes that `0.2` records, states the withdrawal, and
 points at `0.3`; Phase 6 restores the all-shape claim when `0.3` ships. The unary
 worked examples are rewritten in Phase 5, because they are built on the
 `grpcvcr.interceptors` API, which `0.2` replaces; the streaming examples are
@@ -3413,12 +3413,18 @@ Before `0.2`:
 
 - The public conformance matrix passes for the unary-unary and unary-stream rows
   on both stacks. The streaming rows are `0.3`'s gate.
-- A v2 shape the active profile or descriptor registry cannot represent fails
-  before iterator consumption, transport, or authentication; the frozen v1
-  adapter passes its separate corpus. `stream_unary` and `stream_stream` reach
-  that path deliberately in `0.2`, raising `UnsupportedRpcShapeError` from the
-  multicallable's `__call__` with no side effects; `unary_unary` and
-  `unary_stream` never do.
+- Two distinct rejection paths exist and are tested separately, because they
+  assert different contracts:
+    - **Staged-runtime guard.** `stream_unary` and `stream_stream` raise
+      `UnsupportedRpcShapeError` from the multicallable's `__call__`, before
+      iterator consumption, transport, or authentication, with no side effects.
+      Schema v2 represents these shapes perfectly well; only their runtime is
+      deferred to `0.3`, so the failure cause is staging, not representability.
+    - **Representability guard.** A method the active profile or descriptor
+      registry cannot resolve fails at `__call__` with `ConfigurationError`,
+      independent of shape. `unary_unary` and `unary_stream` reach only this
+      path in `0.2`.
+- The frozen v1 adapter passes its separate corpus.
 - Every public production module, including the pytest plugin, is measured by
   coverage, with the plugin actually imported in the measuring run.
 - Targeted mutation testing covers sanitizer, validator, storage transaction,
