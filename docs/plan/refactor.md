@@ -1,15 +1,15 @@
-# grpcvcr 0.2 Refactor Plan
+# grpcvcr 0.2 / 0.3 Refactor Plan
 
-Status: review-converged and implementation-ready, with **one open decision** —
-whether the streaming shapes ship in the single `0.2` or in a follow-on `0.3`
-against the same schema (see [Open decision: release staging](#open-decision-release-staging)).
-The document below specifies Option A, the single combined release; the other
-options are deltas against it, not rewrites.  
+Status: review-converged and implementation-ready. Release staging is
+**decided: Option C** — `0.2` ships the unary shapes at full fidelity, `0.3`
+adds the request-streaming runtime against the same schema v2 event grammar,
+frozen in `0.2`. There is no second schema major and no v2 → v3 migration
+(see [Release staging: decided](#release-staging-decided)).  
 Last updated: 2026-08-30 · Owner: upstream maintainer · Next review: at each phase exit
 
 !!! warning "Not user documentation"
 
-    This is an internal design plan for unreleased 0.2 work, kept in-repo and
+    This is an internal design plan for the unreleased `0.2` and `0.3` work, kept in-repo and
     excluded from the published site by `exclude_docs: plan/**` in `mkdocs.yml`.
     Shipped behavior is described in Concepts and API Reference. Where the two
     disagree, the shipped documentation is authoritative for the current
@@ -24,18 +24,20 @@ consistency against the current codebase.
 
 The immediate target is a safe `grpc.aio` integration for a downstream pilot
 consumer. The design remains general-purpose and preserves a compatibility path
-where one is possible. Request-streaming and bidirectional streaming ship in the
-same release and the same schema as the unary shapes, so the library never
-publishes a version that supports fewer shapes than 0.1.x does.
+where one is possible. `0.2` ships the unary shapes at full fidelity; the
+request-streaming and bidirectional runtime follows in `0.3` against the same
+schema v2 event grammar, which `0.2` freezes. `0.2` therefore records fewer
+shapes than `0.1.x` for one release cycle, and the frozen v1 adapter keeps
+replaying every cassette a user already holds.
 
 ## Goals
 
 - Replay without constructing a live gRPC channel, resolving a host, or
   obtaining credentials.
-- Record and replay all four RPC shapes — unary-unary, unary-stream,
-  stream-unary, and stream-stream — lifecycle faithfully for sync and `grpc.aio`
-  clients; under the strict profile, message/value fidelity is explicitly limited
-  to fields authorized by the recording policy.
+- Record and replay unary-unary and unary-stream lifecycle faithfully for sync
+  and `grpc.aio` clients in `0.2`, and stream-unary and stream-stream in `0.3`
+  against the same schema; under the strict profile, message/value fidelity is
+  explicitly limited to fields authorized by the recording policy.
 - Preserve streaming laziness, sanitized metadata/status, deadlines, callbacks,
   and cancellation behavior at the public gRPC API boundary.
 - Sanitize protobuf and metadata content before it can enter a cassette,
@@ -53,6 +55,9 @@ publishes a version that supports fewer shapes than 0.1.x does.
 
 ## Non-goals for 0.2
 
+- Recording new client-streaming or bidirectional-streaming calls. Schema v2
+  can represent them from `0.2`; the runtime that produces and consumes them
+  ships in `0.3`. The frozen v1 adapter continues to replay pre-existing ones.
 - Exact HTTP/2 scheduling, flow-control, or transport timing reproduction.
 - Sandboxing application-provided sanitizers, credential providers, or hooks.
 - Transparently routing request-streaming `NEW_EPISODES` calls by their full
@@ -63,34 +68,47 @@ publishes a version that supports fewer shapes than 0.1.x does.
 
 | Release | Published | Scope |
 | --- | --- | --- |
-| `0.2` | PyPI | Everything. Cassette v2 covering all four RPC shapes, sync and async routing, strict security profile, compatibility facades, v1 playback adapter, migration tooling, pytest and release hardening, and the correctness fixes already merged on main. |
+| `0.2` | PyPI | Cassette v2, sync and async unary-unary and unary-stream at full fidelity, strict security profile, compatibility facades, v1 playback adapter, migration tooling, pytest and release hardening, and the correctness fixes already merged on main. |
+| `0.3` | PyPI | The request-streaming runtime: `stream_unary` and `stream_stream` recording and replay, against the schema v2 event grammar frozen in `0.2`. No new schema major, no cassette migration. |
 
-`0.2` is the only release this plan produces. There is no `0.1.2`, no `0.3`, and
-no beta. Two consequences follow, and both are accepted deliberately.
+There is no `0.1.2` and no beta. Schema v2 is introduced once, in `0.2`, and
+already covers all four shapes; `0.3` adds only the runtime that produces and
+consumes the streaming half. A cassette recorded under `0.2` is read by `0.3`
+unchanged, and no user migrates between our own schemas.
 
-**The merged correctness fixes wait for `0.2`.** Two merged commits on `main` change replay behavior for cassettes users already hold: replayed-
-error fidelity and cassette portability. A third, scoped target recording,
-changes only cassettes written by `main`, because `v0.1.1` records no `target`
-field at all — `TargetMatcher` and interaction-level `target` are unpublished
-`0.2`-new surface, not v1 compatibility obligations. With no `0.1.2`, the last
-published release stays `0.1.1` and those fixes ship only when `0.2` does —
-69–107 engineer-days out. `0.1.1` therefore remains the final
-published unrestricted v1 writer. If that wait becomes untenable, reinstating a
-patch release is a one-row change to this table plus a tag; nothing else in the
-plan depends on it.
+**The merged correctness fixes wait for `0.2`.** Two merged commits on `main`
+change replay behavior for cassettes users already hold: replayed-error fidelity
+and cassette portability. A third, scoped target recording, changes only
+cassettes written by `main`, because `v0.1.1` records no `target` field at all —
+`TargetMatcher` and interaction-level `target` are unpublished `0.2`-new surface,
+not v1 compatibility obligations. With no `0.1.2`, the last published release
+stays `0.1.1` and those fixes ship only when `0.2` does — 44–72 engineer-days
+out. `0.1.1` therefore remains the final published unrestricted v1 writer. If
+that wait becomes untenable, reinstating a patch release is a one-row change to
+this table plus a tag; nothing else in the plan depends on it.
 
-**The single release ships behind the streaming work.** Folding the causal schema
-and request-streaming into `0.2` means `0.2` cannot ship until the bidi
-prototypes pass, so the pilot-ready async milestone (Phases 0–3) no longer
-corresponds to anything published. The pilot must therefore install by commit —
-see the rollout runbook — rather than pin a released version. Pre-1.0 semver
-permits the combination at no versioning cost; the cost is entirely schedule.
+**`0.2` records fewer RPC shapes than `0.1.x`.** This is the accepted cost of the
+staging and it is a real regression on paper: `0.1.x` records all four shapes and
+`0.2` records two. Three things bound it, and the bound is why the cost is
+acceptable rather than merely tolerated:
 
-The upside is real and is the reason the combination is defensible: the library
-never publishes a version supporting fewer RPC shapes than 0.1.x, users never
-perform a v2 → v3 cassette migration months apart, and there is one *new*
-schema major to introduce, validate, and document, on top of the frozen v1
-adapter that `0.2` supports either way.
+- The frozen v1 adapter still replays existing client-streaming and bidi
+  recordings, so no cassette a user already holds stops working.
+- What is withdrawn is documented-lossy. `0.1.x` concatenates request messages
+  (`src/grpcvcr/interceptors/sync.py:167`), and concatenated protobufs parse as
+  their merge, so message boundaries are unrecoverable *and* distinct streams
+  collide: the two-message stream `[{name:"a"}, {email:"z"}]` and the one-message
+  stream `[{name:"a", email:"z"}]` serialize to the same bytes, so
+  `RequestMatcher` cannot tell them apart. `docs/concepts/streaming.md:87`
+  documents the concatenation as the matching strategy.
+- Two live bugs sit in that path: an intercepted `grpc.aio` reader/writer call
+  deadlocks, and a plain synchronous iterable — legal input to `grpc.aio` —
+  raises `TypeError`.
+
+Withdrawing a lossy, collision-prone, partly broken capability from an alpha
+library and reintroducing it correctly one release later is closer to a
+correctness fix than to a regression. `0.2`'s release notes state the withdrawal
+and name `0.3` as the return.
 
 The downstream pilot installs the Phase 3 branch by commit for early integration,
 which pins more precisely than a pre-release and consumes no version. That
@@ -98,9 +116,11 @@ exploratory run is not release evidence: the five-night promotion gate below is
 rerun against the final candidate identity tuple defined in the rollout runbook.
 
 Because `hatch-vcs` derives the version from the last `v*` tag and no tag lands
-until `v0.2.0`, every artifact built during the program self-reports
-`0.1.2.dev<N>+g<sha>` — a version string for a release this plan says will never
-exist, attached to a package that from Phase 3 contains the `0.2` engine. The
+until `v0.2.0` at the end of Phase 5, every artifact built during Phases 0–5
+self-reports `0.1.2.dev<N>+g<sha>` — a version string for a release this plan
+says will never exist, attached to a package that from Phase 3 contains the `0.2`
+engine. Phase 6 artifacts self-report `0.2.1.dev<N>+g<sha>` for the same reason,
+naming a patch release that will likewise never exist. The
 non-`v` `baseline-0.1.x` marker does not reset `<N>`. Consumers must pin the
 commit SHA, not the version string: `dev<N>` is a commit count that collides
 across branches, and version comparison ignores the `+g<sha>` local segment, so a
@@ -120,7 +140,7 @@ baseline marker without a release requires a non-`v` tag such as
 `baseline-0.1.x`, which Phase 0 creates so the pre-refactor tree stays
 addressable without consuming a version.
 
-`CHANGELOG.md` is the canonical release-note source for `0.2`. Phase 6 creates
+`CHANGELOG.md` is the canonical release-note source for `0.2`. Phase 5 creates
 versioned sections for the prior tags, moves the complete breaking-change list
 out of `[Unreleased]`, points project metadata at the file, and copies the same
 text into the GitHub release rather than maintaining two independent versions.
@@ -153,14 +173,15 @@ artifact hashes, pilot run URLs, promotion approval, and any rollback execution.
 `grpcvcr` is pre-1.0. Semver 2.0.0 permits any change under `0.y.z`, so `0.2` may
 replace the cassette format, change the default matcher, rename fixtures, and
 retire the interceptor subpackage without a major bump and with no required
-deprecation cycle. That permission is what makes a single combined release
-possible at no versioning cost.
+deprecation cycle. That permission is what lets `0.2` withdraw the streaming
+record path and `0.3` restore it without a major bump.
 
-## Open decision: release staging
+## Release staging: decided
 
-The combined release above is Option A. Two alternatives stage the same work
-differently. This section exists because the choice is the maintainer's and the
-costs are not obvious from the phase table.
+**Decision: Option C.** `0.2` ships the unary shapes at full fidelity; `0.3`
+adds the request-streaming runtime against the schema v2 event grammar frozen in
+`0.2`. The alternatives are recorded because the reasoning is not obvious from
+the phase table and the decision is worth being able to revisit.
 
 The decision is **binary at the runtime level**, not a dial. The expensive part
 of streaming support is the call lifecycle — the request pump, half-close as
@@ -191,8 +212,8 @@ introduces a second schema major and the migration tooling to go with it.
 
 ### What each option risks
 
-**A** freezes the v2 event grammar at Phase 1 by prototype rather than at Phase 5
-by implementation. If the streaming implementation finds the model wrong, the
+**A** freezes the v2 event grammar at Phase 1 by prototype rather than by the
+streaming implementation itself. If the streaming implementation finds the model wrong, the
 correction lands in a schema that Phases 2a–4 already validate against, and those
 phases carry rework. It also holds `fail_under = 100` across the whole program
 with no release valve, and strands the merged correctness fixes for the full
@@ -200,8 +221,8 @@ with no release valve, and strands the merged correctness fixes for the full
 Phase 3 it carries the breaking refactor and supports two of four shapes.
 
 **B** ships a `0.2` cassette format that `0.3` then replaces, so every user who
-records against `0.2` migrates. That is the cost the combined release was
-adopted to avoid, and nothing recovers it.
+records against `0.2` migrates. That is the cost the single schema major was
+adopted to preserve, and nothing recovers it.
 
 **C** publishes a release that records fewer shapes than `0.1.x`. That is the
 real cost and it is stated plainly. Three things bound it:
@@ -225,13 +246,18 @@ argument does not hold if real users record those shapes today; that is the one
 fact that should decide it, and the downstream pilot is not such a user — its
 adoption gate names only `GetProject` and one unary-stream interaction.
 
-### If C is chosen
+### Deltas applied for C
 
-The deltas against the document below are small and local:
+The changes this decision made to the rest of the document, recorded so the
+choice can be reversed:
 
 - `Release scope` gains a `0.3` row for the streaming runtime. `0.2`'s row loses
   the streaming shapes.
-- Phase 5 moves to `0.3`. Phase 6 becomes `0.2`'s release phase.
+- The streaming runtime becomes Phase 6, published as `0.3`. The migration,
+  matrix, typing, documentation, and release work becomes Phase 5 and closes
+  `0.2`. The two swap back: documentation and typing must close over the final
+  public surface, and under C that surface is `0.2`'s unary API, which Phase 4
+  completes.
 - `UnsupportedRpcShapeError` becomes reachable in released `0.2` for
   `stream_unary` and `stream_stream`, so it is root-exported after all and the
   root error count returns to eight.
@@ -240,37 +266,58 @@ The deltas against the document below are small and local:
 - Schema v2 is unchanged: it keeps the full four-shape event grammar. This is
   what makes C differ from B, and it is why streaming later needs no schema
   major.
+- Phase 1 keeps the streaming prototypes, because the grammar they validate is
+  frozen in `0.2` even though the runtime is not.
+- Title, status line, `Goals`, and `Non-goals for 0.2` rescoped to the two
+  releases.
+- The streaming subsection of `Breaking changes in 0.2` inverted: the record path
+  is withdrawn in `0.2` and returns in `0.3`, with a 0.1.x-versus-`0.3`
+  comparison table replacing the previous re-implementation note.
+- `Resolved decisions and residual risks` rewritten around the staged release,
+  including the two-of-four-shapes regression and the 44–72-day publication wait.
+- `Estimates and staffing` gained a `0.3 released` row and the release-increment
+  paragraph; `Quality gates` narrowed its `Before 0.2` conformance row to the
+  unary rows.
+- `Test strategy` and `Matching and consumption` gained scoping notes marking
+  their request-stream runtime content as `0.3` obligations.
+- Phase 5 and Phase 6 headings and bodies were rewritten in place, not merely
+  renumbered.
 
-One sub-choice inside C: either freeze the whole grammar now, keeping the Phase 1
-streaming prototypes as a `0.2` gate (44–72 days), or ship `0.2` with the unary
-event kinds and introduce `client_half_close`, `client_ordinal`, and
-`client_messages_sent` in `0.3` under a `required_features` entry (41–69 days).
-The second defers 3 engineer-days and the prototype risk, at the cost that a
-`0.3`-written cassette is unreadable by a `0.2` reader — which the feature
-mechanism already specifies as the correct behavior for a new event kind.
+Option C was chosen. It keeps the whole benefit of combining — one schema major,
+no v2 → v3 migration — while removing 25–35 days from the critical path,
+publishing the merged correctness fixes 25–35 days sooner, and letting the pilot
+pin a released version instead of a commit.
 
-**Recommendation: Option C.** It keeps the whole benefit of combining — one
-schema major, no v2 → v3 migration — while removing 25–35 days from the critical
-path, publishing the merged correctness fixes 25–35 days sooner, and letting the
-pilot pin a released version instead of a commit.
+The sub-choice inside C was resolved toward freezing the full four-shape grammar
+in `0.2` (44–72 days) rather than deferring the streaming event kinds to a
+`required_features` entry in `0.3` (41–69). The deferral saves three
+engineer-days and some prototype risk, but it splits a schema section that has
+been reviewed as a whole, and a `0.2` reader that already knows every event kind
+is the simpler artifact. The cheaper variant remains available and costs one
+edit to the schema section plus a feature-registry entry.
 
 ## Breaking changes in 0.2
 
 This section is normative. `0.2` is a breaking release and its release notes must
 lead with this list.
 
-### Client-streaming and bidi are re-implemented, not removed
+### Client-streaming and bidi recording is withdrawn in 0.2 and returns in 0.3
 
 `RecordingStreamUnaryInterceptor` and `RecordingStreamStreamInterceptor`
 (`grpcvcr.interceptors`) record and replay client-streaming and bidirectional
 calls in 0.1.x, and are covered by `tests/test_interceptor_paths.py`,
 `tests/test_interceptor_paths_async.py`, and `tests/test_streaming_errors.py`.
 
-`0.2` keeps both shapes working, through the routing engine and the causal event
-model rather than through interceptors. The behavior changes even though the
-capability does not, and the changes are the point of the refactor:
+Under a v2 profile `0.2` raises `UnsupportedRpcShapeError` for both shapes. The
+frozen v1 adapter continues to replay existing v1 recordings of them, so nothing
+a user already holds stops working. `0.3` returns both shapes through the
+routing engine, against the schema v2 event grammar `0.2` already froze.
 
-| 0.1.x behavior | 0.2 behavior |
+What returns in `0.3` is not what was withdrawn. The 0.1.x implementation is
+lossy and partly broken, which is why reintroducing it correctly one release
+later is closer to a fix than to a round trip:
+
+| 0.1.x behavior | 0.3 behavior |
 | --- | --- |
 | The request iterator is drained eagerly — `list(request_iterator)` in `interceptors/sync.py:166` and `:232`, `[r async for r in request_iterator]` in `interceptors/aio.py:318` and `:398` — before the call starts. | The iterator is consumed lazily, at the rate the call consumes it. Half-close timing is preserved and generator side effects fire in real order. |
 | Requests are concatenated for matching, so a `NEW_EPISODES` miss is decided only after the whole stream is buffered. | Routing decides before the iterator is touched, via the pre-stream selector. No mode buffers a stream to choose a route. |
@@ -281,21 +328,18 @@ recordings cannot be migrated.** Migration classifies them `re-record required`,
 and the frozen v1 adapter replays them only with their original eager, unframed
 semantics, clearly labeled as legacy behavior.
 
-`UnsupportedRpcShapeError` is **internal**, not root-exported. It subclasses
-`GrpcvcrError` and exists only for the interim state of `main` between Phase 3
-and Phase 5, where `stream_unary` and `stream_stream` are routed but not yet
-implemented. In that interim it is raised from the multicallable's `__call__`,
-before the request iterator is touched and before any transport factory,
-invocation preparer, or credential provider runs.
+`UnsupportedRpcShapeError` is new in `0.2`, subclasses `GrpcvcrError`, and is
+root-exported, so existing `except GrpcvcrError` handlers continue to catch it.
+It is raised for `stream_unary` and `stream_stream` under a v2 profile: those
+shapes are representable in schema v2 but have no runtime until `0.3`. It is
+raised from the multicallable's `__call__`, before the request iterator is
+touched and before any transport factory, invocation preparer, or credential
+provider runs, so a rejected call has no side effects.
 
-The released `0.2` cannot raise it: `RpcShape` is a closed `Literal` over the
-four standard shapes, and a registry gap is a `ConfigurationError`.
-Root-exporting an error no released version can raise would create permanently
-supported public surface with no reachable behavior — and, under
-`fail_under = 100`, would require a test that fabricates an out-of-`Literal`
-shape to cover a branch the type system says is unreachable. This follows the
-pattern commit `9b09963` already established here for `ReplayedRpcError`: name
-the error for when it is raised, and keep it internal.
+It is genuine public surface with reachable behavior for exactly one release
+cycle. `0.3` makes it unreachable for all four standard shapes; it stays exported
+through that cycle and is a candidate for removal afterward. The message names
+the shape and points at `0.3`.
 
 **No** channel factory method raises. All four always return a working
 multicallable object, and registry resolution is deferred to `__call__`.
@@ -335,7 +379,7 @@ cassette against its schema and profile), and `migrate` (v1 → v2 dry-run and
 conversion).
 
 The CLI is public surface and is included in Phase 1's proposed 0.2 snapshot like
-any other export. Phase 6 wires the console script; because `profile-hash` is
+any other export. Phase 5 wires the console script; because `profile-hash` is
 described under [Profile identity](#profile-identity) and is needed to debug a
 `ProfileMismatchError` as soon as profiles exist, Phase 2b lands it as a module
 entry point first.
@@ -627,10 +671,14 @@ two files.
 
 The shipped all-shape claims in `README.md:32`, `docs/index.md:32`,
 `docs/concepts/index.md:28`, `docs/concepts/streaming.md:3`, and
-`CHANGELOG.md:13` remain **true** in `0.2` and are not retracted. Their worked
-examples are rewritten in Phase 6: the examples are built on the
-`grpcvcr.interceptors` API, which `0.2` replaces, and on eager request-iterator
-draining, which `0.2` replaces with lazy consumption.
+`CHANGELOG.md:13` become **false for recording** in `0.2`: only the frozen v1
+adapter still handles client-streaming and bidi, and only for playback. Phase 5
+rescopes each claim to the two shapes `0.2` records, states the withdrawal, and
+points at `0.3`; Phase 6 restores the all-shape claim when `0.3` ships. The unary
+worked examples are rewritten in Phase 5, because they are built on the
+`grpcvcr.interceptors` API, which `0.2` replaces; the streaming examples are
+rewritten in Phase 6, when the shapes they demonstrate return and eager
+request-iterator draining gives way to lazy consumption.
 
 ## Documentation defects in the current release
 
@@ -732,8 +780,7 @@ breaking changes — `DEFAULT_MATCHER`, `find_matching_interaction`, and the
 [Cassette surface changes](#cassette-surface-changes). Phase 0 snapshots the full
 enumerated 0.1.x list. Phase 1 records the proposed 0.2 list, and the final 0.2
 snapshot is generated from the implementation and
-must include all seven new root-exported errors — `UnsupportedRpcShapeError` is
-internal — plus whichever configuration and
+must include all eight new root-exported errors plus whichever configuration and
 routing types the public-API section below marks as exported; no hand-maintained
 numeric total is normative.
 
@@ -983,9 +1030,8 @@ The package root adds `aio_recorded_channel`, `RoutingChannel`,
 `SafeEventSink`, `RpcShape`, `MetadataEntry`, `ChannelOption`, `SafeEventKind`, `SafeEventReason`,
 `CommitState`, `ProjectionTransform`, `MetadataTransformer`, `DEFAULT_LIMITS`, all six
 transport/preparer/completion callback aliases, `StrictMatcher`, `StrictMetadataMatcher`,
-`StrictTargetMatcher`, and `StrictAllMatcher`, plus the seven root-exported
-errors named under breaking changes and the deprecated `GrpcvrError` alias.
-`UnsupportedRpcShapeError` is internal and is not among them. The root
+`StrictTargetMatcher`, and `StrictAllMatcher`, plus the eight root-exported
+errors named under breaking changes and the deprecated `GrpcvrError` alias. The root
 removes `async_recorded_channel`. `PROTOBUF_SAFE` and `LEGACY_RAW` are exported
 immutable profile constants. This list, combined with retained 0.1.x root names,
 is the normative 0.2 root surface; Phase 1 snapshots it directly.
@@ -1211,7 +1257,7 @@ adds `grpcvcr_config`, and its channel factories pass that object unchanged.
 
 The routing implementation must cover the documented public surfaces for all four
 RPC shapes. Verified against grpcio 1.76.0 `__abstractmethods__`. Phases 3 and 4
-satisfy the unary rows; Phase 5 satisfies the streaming rows.
+satisfy the unary rows in `0.2`; Phase 6 satisfies the streaming rows in `0.3`.
 
 | Shape | Sync surface | `grpc.aio` surface |
 | --- | --- | --- |
@@ -1425,7 +1471,7 @@ call additionally holds:
   `_metadata_sent`. Exactly one message is therefore pulled from the
   application's generator before the RPC has sent anything; deferring that pull
   until after delegation would change observable generator side-effect order,
-  which Phase 5's exit criteria forbid. It never runs more than one
+  which Phase 6's exit criteria forbid. It never runs more than one
   pulled-but-unwritten message ahead, and after delegation it is paced by the
   delegate's write backpressure.
 
@@ -2268,9 +2314,11 @@ profile. A `protobuf-safe` envelope carrying opaque payloads would advertise a
 security claim for content that never passed the sanitizer, and is a load error
 rather than a downgrade. The configured registry codec ID must equal the cassette value before the
 stub-provided codec handles playback. `legacy-raw` never revives
-cassette-provided Python imports. The event grammar is profile-independent, so
-`legacy-raw` records all four shapes under the same causal event model; only the
-payload encoding differs.
+cassette-provided Python imports. The event grammar is profile-independent, so `legacy-raw` *represents* all four
+shapes under the same causal event model; only the payload encoding differs. The
+v2 unsupported-shape guard is likewise profile-independent, so new `legacy-raw`
+v2 recording covers the two shapes `0.2` routes, and gains the other two in
+`0.3`.
 
 Unlike the strict profile, new `legacy-raw` v2 records the target, ordered request,
 initial, and trailing metadata (including duplicate order and tagged/base64 binary
@@ -2511,7 +2559,9 @@ bounded reader, so a value stored inside the file can never raise it.
 Two v2 profiles are defined:
 
 - `legacy-raw` preserves explicitly identified codec bytes, raw metadata/target/
-  status details, and legacy matcher and replay behavior for all four shapes.
+  status details, and legacy matcher and replay behavior. Its v2 grammar
+  represents all four shapes; frozen v1 playback covers all four in `0.2`, while
+  new v2 `legacy-raw` recording covers the two shapes `0.2` routes.
 - `protobuf-safe` exposes immutable views, ordered consumption, secure metadata
   defaults, and policy-only persistence.
 
@@ -2534,14 +2584,17 @@ mechanism cannot express.
 The event model is frozen only after executable prototypes cover ping-pong,
 server-first, concurrent reader/writer, early failure, half-close, cancellation,
 abandonment, a server that terminates mid-request-stream, and pre-stream
-selection for a request-streaming shape. Because v2 now ships that model, those prototypes are a Phase 1
-deliverable and a release gate rather than post-release work — this is the
-schedule cost of the single-release decision, recorded in
+selection for a request-streaming shape. Because v2 ships that model from its first release, those prototypes are a
+Phase 1 deliverable and a `0.2` release gate rather than `0.3` work — this is the
+schedule cost of freezing one schema major across both releases, recorded in
 [Release scope](#release-scope).
 
 ## Record modes and streaming routing
 
-Mode behavior is defined for all four shapes. A v1 playback-only cassette under
+Mode behavior is defined for the two shapes `0.2` routes; `0.3` extends the same
+rules to the request-streaming pair, which raise `UnsupportedRpcShapeError` in
+every mode until then, before the request iterator, transport, preparer, or
+credential provider is touched. A v1 playback-only cassette under
 explicit `LEGACY_RAW` is dispatched first and uses its explicitly documented
 all-shape legacy adapter with the original eager, unframed semantics.
 
@@ -2576,7 +2629,7 @@ their original relative order and every interaction is renumbered contiguously.
 Thus source `[A, B]` plus calls `[A, C]` commits `[A, C, B]`, not `[A, B, C]`.
 `NONE` and existing-cassette `ONCE` still treat the same mismatch as an error.
 
-Request-streaming routing, which is in scope for this release:
+Request-streaming routing, which `0.3` adds against these same rules:
 
 - `NONE` reserves a replay interaction and validates messages incrementally.
 - `ALL` always uses genuine live streaming.
@@ -2625,6 +2678,11 @@ of lazy consumption — so the base tuple is `(method, shape, request_fqn,
 PRE_STREAM)`, where `PRE_STREAM` is a fixed sentinel byte string distinct from
 any projection. This is the pre-stream selector: the request stream contributes
 nothing to *selection*, and is *validated* after selection, incrementally.
+
+Everything this section specifies for `stream_unary` and `stream_stream` defines
+`0.3` runtime behavior against the selector and grammar `0.2` freezes. In `0.2`
+those shapes raise `UnsupportedRpcShapeError` from `__call__`, before any
+selector is computed or any interaction reserved.
 
 Because the base tuple for a request-streaming shape discriminates only on method
 and shape, `first_unused` matching on a cassette with two same-method `stream_*`
@@ -2872,24 +2930,30 @@ single-writer use on NFS is fine.
 Each implementation phase is a separately named pull request and merges onto a
 green main without depending on an unmerged successor. Phase labels are local to
 this plan and are never GitHub pull-request numbers. Phase 2 has two intentional
-pull requests, and Phase 5 is a series. Every phase lands before the single `0.2`
-release; none of them publishes.
+pull requests, and Phase 6 is a series. Phases 0–5 land `0.2`; Phase 6 lands
+`0.3`. Only Phase 5 and Phase 6 publish.
 
-| Phase | Title | Estimated effort | Approximate diff |
-| --- | --- | --- | ---: |
-| 0 | Baseline snapshot and release hardening | 3–5 engineer-days | +500 / −60 |
-| 1 | Public API, routing contracts, and streaming prototypes | 6–10 engineer-days | +800 / −100 |
-| 2a | V2 models, validator, and storage transaction | 4–7 engineer-days | +1800 / −250 |
-| 2b | Safe projection, sessions, matching, and v1 adapter | 6–8 engineer-days | +2700 / −450 |
-| 3 | Async routing engine and live-call lifecycle | 10–15 engineer-days | +3000 / −550 |
-| 4 | Sync parity, compatibility facades, and the pytest plugin | 10–15 engineer-days | +2000 / −900 |
-| 5 | Request-streaming and bidirectional shapes | 25–35 engineer-days | series |
-| 6 | Migration tooling, dependency matrix, typing, documentation, and release | 5–12 engineer-days | +1200 / −450 |
+| Phase | Release | Title | Estimated effort | Approximate diff |
+| --- | --- | --- | --- | ---: |
+| 0 | `0.2` | Baseline snapshot and release hardening | 3–5 engineer-days | +500 / −60 |
+| 1 | `0.2` | Public API, routing contracts, and streaming prototypes | 6–10 engineer-days | +800 / −100 |
+| 2a | `0.2` | V2 models, validator, and storage transaction | 4–7 engineer-days | +1800 / −250 |
+| 2b | `0.2` | Safe projection, sessions, matching, and v1 adapter | 6–8 engineer-days | +2700 / −450 |
+| 3 | `0.2` | Async routing engine and live-call lifecycle | 10–15 engineer-days | +3000 / −550 |
+| 4 | `0.2` | Sync parity, compatibility facades, and the pytest plugin | 10–15 engineer-days | +2000 / −900 |
+| 5 | `0.2` | Migration tooling, dependency matrix, typing, documentation, and release | 5–12 engineer-days | +1200 / −450 |
+| 6 (series) | `0.3` | Request-streaming and bidirectional shapes | 25–35 engineer-days | series |
 
-Documentation, typing, and the dependency matrix land last, after streaming. They
-must close over the *final* public surface, and with the streaming shapes in the
-release that surface is not final until Phase 5 lands. Running Phase 6 first
-would mean documenting and type-freezing an API that Phase 5 then changes.
+Documentation, typing, and the dependency matrix land at the end of `0.2`, in
+Phase 5. They must close over the *final* public surface of the release they
+document, and under Option C that surface is `0.2`'s unary API, which Phase 4
+completes. Phase 6 carries its own smaller release increment for `0.3`.
+
+Phase 1 keeps the streaming prototypes even though the streaming runtime is a
+`0.3` phase: the schema v2 event grammar covering all four shapes is frozen in
+`0.2` by Phase 2a's validator, so it must be validated before then. This is the
+one place where `0.3` work is pulled forward, and it is deliberate — it is what
+buys the single schema major.
 
 The downstream pilot is not a `grpcvcr` pull request. It lands in the consumer's
 repository and is tracked by the
@@ -2920,9 +2984,10 @@ Exit criteria:
 - A non-`v` tag `baseline-0.1.x` marks the pre-refactor tree.
 
 Nothing is published here. `release.yml` publishes an artifact it never installs
-or tests today, so the hardening lands long before the only tag that will trigger
-it — `v0.2.0`, at the end of Phase 6. The `baseline-0.1.x` marker is deliberately
-non-`v` so the workflow's `v*` trigger ignores it.
+or tests today, so the hardening lands long before the first tag that will
+trigger it — `v0.2.0`, at the end of Phase 5, followed by `v0.3.0` at the end of
+Phase 6. The `baseline-0.1.x` marker is deliberately non-`v` so the workflow's
+`v*` trigger ignores it.
 
 ### 1. Public API, routing contracts, and streaming prototypes
 
@@ -2943,7 +3008,7 @@ carry a tested 3.10 packaging patch.
 Coherent because the shipped surface it adds is inert — contracts, configuration
 objects, and ABCs that neither route nor persist a v2 call. The streaming
 prototypes live under `prototypes/`, outside the measured package and outside the
-wheel; they prove the event model and are deleted when Phase 5 supersedes them.
+wheel; they prove the event model and are deleted when Phase 6 supersedes them.
 Later behavior is measured against its golden files.
 
 Exit criteria:
@@ -3021,7 +3086,7 @@ Exit criteria:
   cancel/delegate race.
 - Concurrent credential refresh and `UNAUTHENTICATED` retry behavior remains
   correct.
-- The phase 1 differential harness, re-pointed at `AsyncRoutingChannel`, passes:
+- The Phase 1 differential harness, re-pointed at `AsyncRoutingChannel`, passes:
   the same interceptor stack run against a real `grpc.aio` channel and against
   `AsyncRoutingChannel` produces identical observable behavior.
 
@@ -3060,8 +3125,8 @@ fixtures construct exactly the facades this phase restores.
 Exit criteria:
 
 - Sync and aio behavior match the **unary-unary and unary-stream rows** of the
-  public conformance matrix. The two streaming rows are Phase 5's exit criterion
-  and are not asserted here, so Phase 4 does not depend on unmerged Phase 5.
+  public conformance matrix, which is the whole matrix `0.2` claims. The two
+  streaming rows are Phase 6's exit criterion in `0.3`.
 - Every name in the Phase 1 snapshot is resolved as facade, deprecation,
   or documented removal.
 - The sync deferred-call state model, per-operation wait timeouts, cancellation,
@@ -3072,35 +3137,7 @@ Exit criteria:
   `!!binary` method key — and files produced by post-`262598b` `main`, which
   carry the normalized text key.
 
-### 5. Request-streaming and bidirectional shapes
-
-Implements the pre-stream routing selector contract; async iterator and explicit
-`write`/`done_writing`/`read` modes; rejection of mixed iterator and read/write
-use as gRPC does; sync client-streaming and bidi request/response iterator
-wrappers; and lazy request-iterator consumption that never buffers a stream to
-choose a route. Covers server-first, ping-pong, half-close, early failure,
-concurrent reader/writer, cancellation, and abandoned calls.
-
-Not a single pull request. It is a series against the event grammar frozen in
-Phase 1 and validated in Phase 2a, sequenced after sync parity so both stacks
-gain the streaming shapes against one settled call lifecycle.
-
-Coherent because it is the last change to the public surface. Nothing after it
-alters an API signature.
-
-Exit criteria:
-
-- No mode drains a request iterator to make a routing decision, and generator
-  side effects fire in the same order as against a real channel.
-- `stream_stream` replay satisfies the four guarantees in [Replay of
-  `stream_stream` interleaving](#replay-of-stream_stream-interleaving), verified
-  against a real server, and a differential test shows that two recordings of the
-  same deterministic bidi server may differ in `client_messages_sent` while both
-  replay identically under the default mode.
-- `UnsupportedRpcShapeError` is unreachable for the four standard shapes under
-  `protobuf-safe`.
-
-### 6. Migration tooling, dependency matrix, typing, documentation, and release
+### 5. Migration tooling, dependency matrix, typing, documentation, and the `0.2` release
 
 Contains cassette `validate`, migration dry-run and reporting; a floor job on
 Python 3.11 using grpcio 1.50/protobuf 4.21-compatible generated fixtures;
@@ -3111,7 +3148,9 @@ tightened Pyright on replacement modules and
 `[tool.mypy]` block and the `mypy`, `types-protobuf`, and `types-pyyaml` dev
 dependencies, since only pyright runs in pre-commit and CI; `CHANGELOG.md` as the
 canonical release-note home; documentation
-rewritten to the shapes actually supported; executable documentation examples
+rewritten to the two shapes `0.2` actually supports, including the withdrawal of
+the client-streaming and bidi record path and a pointer to `0.3`; executable
+documentation examples
 restored, or the dead `test-examples` Makefile target and the two
 `--ignore=tests/test_examples.py` flags removed, since `tests/test_examples.py`
 does not exist; `validation: anchors: warn` added for published documentation;
@@ -3131,11 +3170,56 @@ Exit criteria:
   breaking-change list appears in the versioned changelog section.
 - The release workflow records final artifact hashes and exposes the protected
   post-merge pilot/rollback-rehearsal gate used before promotion; the five-night
-  wait is a release gate below, not a condition for merging the Phase 6 PR.
-- `v0.2.0` is tagged only after every gate passes. It is the first and only tag
-  this plan publishes.
+  wait is a release gate below, not a condition for merging the Phase 5 PR.
+- `v0.2.0` is tagged only after every gate passes. It is the first tag this plan
+  publishes; `v0.3.0` follows at the end of Phase 6.
+
+### 6. Request-streaming and bidirectional shapes, published as `0.3`
+
+Implements the pre-stream routing selector contract; async iterator and explicit
+`write`/`done_writing`/`read` modes; rejection of mixed iterator and read/write
+use as gRPC does; sync client-streaming and bidi request/response iterator
+wrappers; and lazy request-iterator consumption that never buffers a stream to
+choose a route. Covers server-first, ping-pong, half-close, early failure,
+concurrent reader/writer, cancellation, and abandoned calls.
+
+Not a single pull request. It is a series against the event grammar frozen in
+Phase 1 and validated in Phase 2a, sequenced after `0.2` ships so both stacks
+gain the streaming shapes against one settled and released call lifecycle.
+
+Coherent because it adds two shapes to a frozen engine without changing the
+existing public surface: no `0.2` signature moves, and no cassette recorded under
+`0.2` needs rewriting. It carries its own small release increment for `0.3`,
+reusing the `0.2` release machinery unchanged.
+
+Exit criteria:
+
+- No mode drains a request iterator to make a routing decision, and generator
+  side effects fire in the same order as against a real channel.
+- `stream_stream` replay satisfies the four guarantees in [Replay of
+  `stream_stream` interleaving](#replay-of-stream_stream-interleaving), verified
+  against a real server, and a differential test shows that two recordings of the
+  same deterministic bidi server may differ in `client_messages_sent` while both
+  replay identically under the default mode.
+- All four shapes record and replay on both stacks, matching the full public
+  conformance matrix.
+- `UnsupportedRpcShapeError`, reachable in `0.2` for the two streaming shapes,
+  becomes unreachable for all four standard shapes under either profile. It stays
+  root-exported for the `0.3` cycle and is a candidate for removal thereafter.
+- A `0.2`-written cassette loads and replays under `0.3` unchanged. A
+  `0.3`-written streaming cassette loads and validates under a `0.2` reader —
+  schema v2 is one grammar covering all four shapes — and then fails at
+  invocation with `UnsupportedRpcShapeError` naming the shape, rather than
+  misreplaying it.
 
 ## Test strategy
+
+Every test in this section is a `0.2` obligation unless it names `stream_unary`,
+`stream_stream`, or request-stream *runtime* behavior; those belong to Phase 6
+and gate `0.3`. Request-stream *schema* tests — `client_message`,
+`client_half_close`, and `client_messages_sent` cardinality and ordering — are
+`0.2` obligations, because Phase 2a's validator freezes the four-shape grammar in
+`0.2`.
 
 ### No-live-side-effects tests
 
@@ -3327,10 +3411,14 @@ Before the downstream pilot:
 
 Before `0.2`:
 
-- The full public conformance matrix passes for all four shapes on both stacks.
+- The public conformance matrix passes for the unary-unary and unary-stream rows
+  on both stacks. The streaming rows are `0.3`'s gate.
 - A v2 shape the active profile or descriptor registry cannot represent fails
   before iterator consumption, transport, or authentication; the frozen v1
-  adapter passes its separate corpus. No standard shape reaches that path.
+  adapter passes its separate corpus. `stream_unary` and `stream_stream` reach
+  that path deliberately in `0.2`, raising `UnsupportedRpcShapeError` from the
+  multicallable's `__call__` with no side effects; `unary_unary` and
+  `unary_stream` never do.
 - Every public production module, including the pytest plugin, is measured by
   coverage, with the plugin actually imported in the measuring run.
 - Targeted mutation testing covers sanitizer, validator, storage transaction,
@@ -3392,14 +3480,20 @@ Only then should the custom seam be removed.
 
 | Milestone | Phases | Estimated effort |
 | --- | --- | ---: |
-| Async unary/unary-stream, pilot installs by commit | 0–3 | 29–45 engineer-days |
-| Sync parity; public surface complete except streaming | 0–4 | 39–60 engineer-days |
-| All four shapes; public surface final | 0–5 | 64–95 engineer-days |
-| `0.2` released | 0–6 | 69–107 engineer-days |
+| Async unary/unary-stream, pilot may install by commit | 0–3 | 29–45 engineer-days |
+| Sync parity; `0.2` public surface complete | 0–4 | 39–60 engineer-days |
+| **`0.2` released** | 0–5 | **44–72 engineer-days** |
+| **`0.3` released, all four shapes** | 0–6, plus the `0.3` release increment | **71–111 engineer-days** |
 
-Only the last row corresponds to a published artifact. The first three are
-internal checkpoints, and the pilot consumes the first by commit rather than by
-version — a direct consequence of the single-release decision.
+Two rows correspond to published artifacts. The pilot can pin released `0.2`
+rather than a commit, which is the point of the staging; installing the Phase 3
+branch by commit remains available for earlier integration but is not required
+and is not release evidence.
+
+The `0.3` total includes a small release increment beyond Phase 6's 25–35
+engineer-days, since release overhead is paid twice. That is the 2–4 engineer-day
+premium the staging costs against shipping everything at once, in exchange for
+publishing 25–35 days sooner.
 
 The work benefits from one core runtime architect and one security/testing
 engineer, with a downstream integration owner contributing integration cases.
@@ -3409,52 +3503,53 @@ tightly coupled.
 
 ## Resolved decisions and residual risks
 
-### Single release: no `0.1.2`, no `0.3`
+### Staged release: no `0.1.2`; streaming in `0.3`
 
-Decision: `0.2` is the only release. The intermediate patch release is dropped
-and the streaming work is folded in rather than deferred.
+Decision: the intermediate patch release is dropped, and the streaming runtime
+ships one release after the unary shapes rather than with them. Full reasoning
+and the alternatives are in
+[Release staging: decided](#release-staging-decided).
 
-What this buys: the library never publishes a version supporting fewer RPC shapes
-than 0.1.x; there is one cassette schema major instead of two, so no user
-migrates v2 → v3; and documentation, typing, and the public-surface freeze happen
-once, over a final API.
+What this buys: the first published release lands 25–35 engineer-days sooner, the
+merged correctness fixes reach users at `0.2` instead of at the end of the whole
+program, the pilot pins a released version instead of a commit, and there is
+still exactly one new schema major, so no user migrates v2 → v3.
 
 What it costs, and these are the residual risks rather than settled questions:
 
-- **The merged commits stay unpublished for 69–107 engineer-days**, including two
+- **`0.2` records two of four RPC shapes.** The frozen v1 adapter still replays
+  existing streaming recordings, and what is withdrawn is documented-lossy with
+  two live bugs, so the practical loss is small — but it is a published
+  regression against `0.1.x` and the release notes say so plainly.
+- **The merged commits stay unpublished for 44–72 engineer-days**, including two
   replay-correctness fixes for cassettes users already hold. `main` is a usable
   source for them only through Phase 2b. From Phase 3 it carries the full
   breaking refactor — interceptors replaced, `async_recorded_channel` removed,
   strict matching by default, raw exception attributes removed, `GrpcvrError`
-  gone — and between Phase 3 and Phase 5 it raises `UnsupportedRpcShapeError` for
-  `stream_unary` and `stream_stream`, so for that window `main` supports two of
-  the four shapes. The "never fewer shapes than 0.1.x" guarantee is about
-  *published* versions and does not extend to `main`; affected users are directed
-  to a `0.1.1` plus cherry-pick patch, not to `main`, once Phase 3 merges. If
-  that becomes untenable, a `0.1.2` tag is a one-row change to
-  [Release scope](#release-scope) and costs no phase work.
-- **The `fail_under = 100` gate holds for the whole program with no release
-  valve.** Every phase merges green, and green is 100% branch coverage of
+  gone. Affected users are directed to a `0.1.1` plus cherry-pick patch, not to
+  `main`, once Phase 3 merges. If that becomes untenable, a `0.1.2` tag is a
+  one-row change to [Release scope](#release-scope) and costs no phase work.
+- **The `fail_under = 100` gate holds across both releases with no valve inside
+  either.** Every phase merges green, and green is 100% branch coverage of
   `src/grpcvcr`. Phase 1's streaming prototypes therefore live under
   `prototypes/`, outside the measured package and outside the wheel, and are
-  deleted when Phase 5 supersedes them; they are proof artifacts, not shipped
+  deleted when Phase 6 supersedes them; they are proof artifacts, not shipped
   code. Phase 4 removes `pytest_plugin.py` from `[tool.coverage.run] omit` and
   removes `-p no:grpcvcr` from `Makefile` and `ci.yml`, taking that module from
   unmeasured to fully measured in one PR: bringing it to 100% is Phase 4 scope
-  and is included in its estimate. Phases 3 and 5 carry the bulk of the cost,
+  and is included in its estimate. Phases 3 and 6 carry the bulk of the cost,
   because their error branches — transport-factory failure, the cancel/delegate
   race, `DIRTY_UNKNOWN` commit-only retries, and every `SafeEventReason` storage
   stage — need fault injection to reach.
-- **The pilot cannot pin a released version.** It installs the Phase 3 branch by
-  commit, so the rollout runbook's identity tuple — not a version string — is the
-  only reproducible handle on what the pilot ran.
-- **The v2 event grammar is frozen at Phase 1 by prototype**, not at Phase 5 by
-  implementation. If the streaming implementation discovers the model is wrong,
-  the correction lands in a schema the earlier phases already validate against,
-  and Phases 2a–4 carry rework. This is the single largest schedule risk created
-  by combining, and Phase 1's prototype gate exists specifically to contain it.
-- **One long-lived release branch.** With nothing published for the duration, the
-  usual pressure-relief valve of shipping a smaller increment is unavailable.
+- **The v2 event grammar is still frozen at Phase 1 by prototype**, not by
+  implementation, because it covers all four shapes while only two have a runtime
+  in `0.2`. If Phase 6 discovers the model is wrong, the correction lands in a
+  schema `0.2` already published, and the fix is a `required_features` addition
+  rather than a silent change. This is the largest residual risk of the staging
+  and Phase 1's prototype gate exists specifically to contain it. The cheaper
+  sub-option — shipping `0.2` with only the unary event kinds and adding the
+  streaming kinds in `0.3` under a feature — removes this risk entirely and
+  remains available.
 
 ### Python 3.10
 
@@ -3480,7 +3575,7 @@ Decision: this internal plan is not published. `mkdocs.yml` removes the nav entr
 and sets `exclude_docs: plan/**`, so MkDocs does not emit the page at an unlinked
 URL. The file remains in-repo for implementation review. Because the file is excluded
 from the build set, `mkdocs build --strict` neither renders it nor validates its
-links; Phase 6 adds an explicit test asserting `site/plan/` is absent after a
+links; Phase 5 adds an explicit test asserting `site/plan/` is absent after a
 build, plus the separate repository-relative Markdown-link check named in that
 phase. Anchors in this document are therefore verified against both
 Python-Markdown and GitHub slug rules, since GitHub is the only renderer that
