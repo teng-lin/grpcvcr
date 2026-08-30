@@ -5,6 +5,10 @@ site_url: https://grpcvcr.readthedocs.io
 repo_name: tboser/grpcvcr
 repo_url: https://github.com/tboser/grpcvcr
 
+# Internal implementation plans are kept in-repo but are not published.
+exclude_docs: |
+  plan/**
+
 theme:
   name: material
   features:
@@ -56,8 +60,6 @@ nav:
   - Examples:
       - Basic Usage: examples/basic.md
       - Advanced Patterns: examples/advanced.md
-  - Development:
-      - Refactor Plan: plan/index.md
   - API Reference:
       - api/index.md
       - Cassette: api/cassette.md
