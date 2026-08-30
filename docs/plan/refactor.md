@@ -1232,6 +1232,9 @@ with any intentional timing deviation called out below:
   gRPC's message, `The iterator and read/write APIs may not be mixed on a single
   RPC.` Response style is first-use-wins and applies to `unary_stream` and
   `stream_stream`.
+- `read()` on an already-terminated call returns `EOF` or raises its status
+  *before* recording a style, so it does not poison a subsequent `__aiter__`;
+  grpcvcr matches that ordering.
 - Request style is **not** first-use-wins: it is fixed at `__call__`. Passing a
   `request_iterator` selects iterator style, and the **first** `write()` or
   `done_writing()` on that call raises the same `UsageError` — nothing was
@@ -2572,6 +2575,13 @@ treated as if it did.
   them because ordinal selection remains unambiguous. A `first_unused` session
   fails the commit with a safe report naming the colliding ordinals and retains
   dirty state; it never writes a cassette that its own configured reader rejects.
+- For `stream_unary` and `stream_stream` the base key carries no request body, so
+  two interactions on the same method **always** collide. A `first_unused`
+  session therefore cannot record or replay two calls to the same streaming
+  method unless a configured additive matcher discriminates them. This is
+  correct-but-surprising and is stated here so it does not read as a bug:
+  strict-sequence playback, the `protobuf-safe` default, is unaffected and is the
+  supported regime for the streaming shapes.
 
 Caller-supplied cassette and lock paths may appear in strict diagnostics and
 exception messages; they are caller-provided, not derived from recorded data. No
@@ -3406,10 +3416,23 @@ speculative network behavior. This decision must not be relaxed for convenience
 without a separately named policy that clearly states its semantic trade-offs.
 
 The current implementation does the opposite today — `requests = [r async for r
-in request_iterator]` in `src/grpcvcr/interceptors/aio.py` and
-`list(request_iterator)` in `sync.py` — destroying laziness, half-close timing,
-and any generator with side effects. Convenience must not reintroduce it outside
-the explicitly frozen v1 playback adapter.
+in request_iterator]` in `src/grpcvcr/interceptors/aio.py:318` and `:398`, and
+`list(request_iterator)` in `sync.py:166` and `:232` — destroying laziness,
+half-close timing, and any generator with side effects. Two aio cases are hard
+failures rather than fidelity losses, which is why this is a correctness fix and
+not only a fidelity one:
+
+- A reader/writer-style call **deadlocks**. When the caller does
+  `call = stub.Method()` with no iterator, `grpc.aio` substitutes
+  `_proxy_writes_as_request_iterator`, whose first statement awaits the
+  interceptor task — and grpcvcr drains that generator *inside* the interceptor
+  task, so the generator waits on the task waiting on the generator.
+- A plain synchronous iterable raises `TypeError`. `grpc.aio` accepts
+  `Iterable | AsyncIterable` and branches on `__aiter__`, so a list or ordinary
+  generator is legal input today and `async for` rejects it.
+
+Convenience must not reintroduce eager draining outside the explicitly frozen v1
+playback adapter.
 
 ### Canonicalization scope
 
